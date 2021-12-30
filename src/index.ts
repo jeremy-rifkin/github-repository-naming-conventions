@@ -5,20 +5,40 @@ import * as fs from "fs";
 const database = "data.json";
 const auth_file = "auth_token.txt";
 
-const languages = ["C", "CPP", ["JavaScript", "TypeScript"], "Python", ["Java", "Kotlin"], "Go", "PHP", "C#", "Ruby", "Dart", "Swift"];
+const languages = [ "C", "CPP", ["JavaScript", "TypeScript"], "Python", ["Java", "Kotlin"], "Go",
+                    "PHP", "C#", "Ruby", "Dart", "Swift" ];
 
-//const all_caps = /^[A-Z0-9]+$/;
-const cases: [string, RegExp][] = [
-	["lowercase", /^[a-z0-9\.]+$/],
+const formats: [string, RegExp][] = [
+	["lowercase", /^[0-9\.]*[a-z][a-z0-9\.]*$/],
 	["Uppercase", /^[0-9\.]*[A-Z][a-z0-9\.]*$/],
-	["lowerCamel", /^[0-9\.]*[a-z][a-z0-9\.]*([0-9\.]*[A-Z][a-z0-9\.]*)+$/],
-	["UpperCamel", /^[0-9\.]*[A-Z][a-zA-Z0-9\.]*([0-9\.]*[A-Z][a-z0-9\.]*)+$/],
-	["snake_case", /^[0-9\.]*([a-z][a-zA-Z0-9\.]*|(?=_))(_+([0-9\.]*[a-zA-Z][a-zA-Z0-9\.]*|[0-9\.]*))+$/],
-	["Upper_Snake", /^[0-9\.]*([A-Z][a-zA-Z0-9\.]*|(?=_))(_+([0-9\.]*[a-zA-Z]+[a-zA-Z0-9\.]*|[0-9\.]*))+$/],
-	["kebab-case", /^[0-9\.]*([a-z][a-zA-Z0-9\.]*|(?=-))(-+([0-9\.]*[a-zA-Z][a-zA-Z0-9\.]*|[0-9\.]*))+$/],
-	["Upper-Kebab", /^[0-9\.]*([A-Z][a-zA-Z0-9\.]*|(?=-))(-+([0-9\.]*[a-zA-Z]+[a-zA-Z0-9\.]*|[0-9\.]*))+$/],
+	["ALLCAPS", /^[0-9\.]*[A-Z][A-Z0-9\.]*$/],
+	["camelCase", /^[0-9\.]*[a-z][a-z0-9\.]*([A-Z][a-z0-9\.]*)+$/],
+	["UpperCamel", /^[0-9\.]*[A-Z][a-z0-9\.]*([A-Z][a-z0-9\.]*)+$/],
+	// Lower/upper snake/kebab are distinguished by the first character
+	// Motivation: tiny-AES-c should be recognized as kebab-case, How-to-XYZ should be recognized as Upper-Kebab
+	// I don't know what to do about weirdness like foo-Bar-Baz, for now I will just assume it doesn't happen :)
+	// ([0-9\.]+_)?
+	["snake_case", /^([0-9\.]*[a-z][a-zA-Z0-9\.]*(_[a-zA-Z0-9\.]*)+|[0-9\.]*_[0-9\.]*[a-z][a-zA-Z0-9\.]*(_[a-zA-Z0-9\.]*)*)$/],
+	["Upper_Snake", /^([0-9\.]*[A-Z][a-zA-Z0-9\.]*(_[a-zA-Z0-9\.]*)+|[0-9\.]*_[0-9\.]*[A-Z][a-zA-Z0-9\.]*(_[a-zA-Z0-9\.]*)*)$/],
+	["CAPS_SNAKE", /^([0-9\.]*[A-Z][A-Z0-9\.]*(_[A-Z0-9\.]*)+|[0-9\.]*_[0-9\.]*[A-Z][A-Z0-9\.]*(_[A-Z0-9\.]*)*)$/],
+	["kebab-case", /^([0-9\.]*[a-z][a-zA-Z0-9\.]*(-[a-zA-Z0-9\.]*)+|[0-9\.]*-[0-9\.]*[a-z][a-zA-Z0-9\.]*(-[a-zA-Z0-9\.]*)*)$/],
+	["Upper-Kebab", /^([0-9\.]*[A-Z][a-zA-Z0-9\.]*(-[a-zA-Z0-9\.]*)+|[0-9\.]*-[0-9\.]*[A-Z][a-zA-Z0-9\.]*(-[a-zA-Z0-9\.]*)*)$/],
+	["CAPS-KEBAB", /^([0-9\.]*[A-Z][A-Z0-9\.]*(-[A-ZA-Z0-9\.]*)+|[0-9\.]*-[0-9\.]*[A-Z][A-Z0-9\.]*(-[A-ZA-Z0-9\.]*)*)$/],
 	["other", /^.*$/]
 ];
+
+// There are some collisions here
+// C or C123 will be matched by Uppercase and ALLCAPS
+// DOOM will be matched by ALLCAPS and UpperCamel
+// Same situations arise for CAPS_SNAKE and CAPS-KEBAB
+
+const overrides: { [key: string]: string } = {
+	// Read as ALLCAPS < Uppercase
+	"ALLCAPS": "Uppercase",
+	"UpperCamel": "ALLCAPS",
+	"Upper_Snake": "CAPS_SNAKE",
+	"Upper-Kebab": "CAPS-KEBAB"
+};
 
 function get_lang_param(language: string | string[]) {
 	if(typeof language == "string") {
@@ -36,8 +56,8 @@ function language_list(language: string | string[]) {
 	}
 }
 
-function get_by_key(key: string) {
-	for(let [k, re] of cases) {
+function get_format(key: string) {
+	for(let [k, re] of formats) {
 		if(k == key) {
 			return re;
 		}
@@ -90,8 +110,10 @@ function print_tables(counts: {[key: string]: { [key: string]: number } }, keys:
 async function main() {
 	let data: { [key: string]: { full_name: string, name: string, stars: number }[] } = {};
 	if(fs.existsSync(database)) {
+		// If data already collected, read
 		data = JSON.parse(await fs.promises.readFile(database, { encoding: "utf-8" }));
 	} else {
+		// If data not already collected, collect it
 		const octokit = new Octokit({ auth: await fs.promises.readFile(auth_file, { encoding: "utf-8" }) });
 		const response = await octokit.rest.users.getAuthenticated();
 		console.log(`Logged in as ${response.data.login}`);
@@ -130,53 +152,34 @@ async function main() {
 		}
 		await fs.promises.writeFile(database, JSON.stringify(data, undefined, "\t"), { encoding: "utf-8" });
 	}
-	// quick sanity check
-	///for(let [_, items] of Object.entries(data)) {
-	///	for(let i = 1; i < items.length; i++) {
-	///		console.log(items[i - 1].stars, items[i].stars);
-	///		assert(items[i - 1].stars >= items[i].stars);
-	///	}
-	///}
-	// todo: make sure no duplicates?
-	// print by language and print an aggregate
+	// note: there could be duplicates in the data, not really concerned with them as they would be very rare
 	let counts: {[key: string]: { [key: string]: number } } = { totals: {} };
 	let detected_cases: {[key: string]: string[] } = { };
-	for(let [key, _] of cases) {
+	for(let [key, _] of formats) {
 		counts.totals[key] = 0;
 		detected_cases[key] = [];
 	}
 	for(let [language, items] of Object.entries(data)) {
 		counts[language] = {};
-		for(let [key, _] of cases) {
+		for(let [key, _] of formats) {
 			counts[language][key] = 0;
 		}
 		for(let item of items) {
 			let found = false;
-			for(let [key, re] of cases) {
+			for(let [key, re] of formats) {
 				if(found && key == "other") {
 					continue;
 				}
 				if(re.test(item.name)) {
-					if(key == "Upper-Kebab") {
-						// something like foo-bar will be matched by Upper-Kebab because we need to
-						// match things like How-to-XYZ
-						// If this is really a lower kebab match, just continue
-						if(get_by_key("kebab-case").test(item.name)) {
-							console.log("Kebab warning:", item.full_name);
-							continue;
-						}
-					}
-					if(key == "Upper_Snake") {
-						// something like test_123 will be matched by Upper-Snake and lower snake
-						// If this is really a lower snake match, just continue
-						if(get_by_key("snake_case").test(item.name)) {
-							console.log("Snake warning:", item.full_name);
+					if(key in overrides) {
+						if(get_format(overrides[key]).test(item.name)) {
+							console.log(`Override warning: ${overrides[key]} > ${key}: ${item.full_name}`);
 							continue;
 						}
 					}
 					// sanity check: make sure not double counted
 					if(found) {
-						for(let [key, re] of cases) {
+						for(let [key, re] of formats) {
 							if(re.test(item.name)) {
 								console.log("->", key);
 							}
@@ -192,11 +195,16 @@ async function main() {
 			assert(found);
 		}
 	}
-	console.log(detected_cases);
-	console.log(counts);
+	console.dir(detected_cases, {
+		maxArrayLength: null
+	});
+	console.dir(counts);
+	console.log();
 	// print tables
-	print_tables(counts, cases.map(e => e[0]));
-	print_tables(counts, cases.filter(e => e[0] != "lowercase").map(e => e[0]));
+	print_tables(counts, formats.map(e => e[0]));
+	print_tables(counts, formats
+	                       .filter(e => ["lowercase", "Uppercase", "ALLCAPS"].indexOf(e[0]) == -1)
+	                       .map(e => e[0]));
 }
 
 main();
